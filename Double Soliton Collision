@@ -1,0 +1,205 @@
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from math import sin
+from scipy import integrate
+
+# Specifications for the plot
+plt.rc('font', family='serif', size=16)
+plt.rc('lines', linewidth=1.5)
+plt.rc('legend', fontsize=12)
+
+#Boundary Conditions
+δ1 = 0
+δ2 = 0
+
+#Parameters of analytic solution
+c = 1.0
+κ = 1.0
+λ = -8.3
+χ = abs(λ/1.62)
+
+# Parameters for first soliton (moving right)
+ν1 = 0.8
+γ1 = np.sqrt(1-ν1**2/c**2)
+ε1 = (3 * γ1 * χ) / (math.sqrt(2) * λ)
+
+# Parameters for second soliton (moving left)
+ν2 = -0.8  # Negative velocity for opposite direction
+γ2 = np.sqrt(1-ν2**2/c**2)
+ε2 = (3 * γ2 * χ) / (math.sqrt(2) * λ)
+
+q = -1.0    # Equal to ±1 and -1 for the Good Boussinesq Eqn
+
+###### Analytic solution functions ###########
+def single_soliton(x, ν, γ, ε):
+    """Single Soliton solution"""
+    E = np.exp(γ * x / κ)
+    u_x = -6 * (γ**2)/λ * E/((E+1)**2 + ε *(1-E**2))    # Modified Boussinesq Field
+    return u_x
+
+def double_soliton(x, t):
+    """Superposition of two solitons"""
+    # Calculate positions for both solitons to meet at t=50s
+    x_center = 0  # Center of collision
+    # First soliton (moving right)
+    x1_init = x_center - 50 * ν1
+    # Second soliton (moving left)
+    x2_init = x_center - 50 * ν2
+
+    # Current positions based on time
+    x1_t = x - x1_init - ν1 * t
+    x2_t = x - x2_init - ν2 * t
+
+    # Superposition of the two solitons
+    return single_soliton(x1_t, ν1, γ1, ε1) + single_soliton(x2_t, ν2, γ2, ε2)
+
+#Grid: discrete space and time
+xmin, xmax = -100.0, 100.0  # start and end of spatial domain
+Nx = 2000  # number of spatial points
+x = np.linspace(xmin, xmax, Nx)  # discretization of space
+dx = float((xmax-xmin)/(Nx-1))  # spatial step size
+dt = 0.002  # time step
+Nt = 60000  # number of time steps
+
+# For 3D plotting, plot every 5 seconds (5/dt = 2500 steps)
+seconds_interval = 5
+steps_interval = int(seconds_interval / dt)
+t_samples = range(0, Nt+1, steps_interval)
+num_t_samples = len(t_samples)
+
+# Create arrays for the 3D plot
+T, X = np.meshgrid(np.array([t*dt for t in t_samples]), x)
+W = np.zeros((num_t_samples, Nx))
+
+# Generate the solution for each time step
+w_corrector = np.zeros([Nt+1, len(x)])
+w_predictor = np.zeros([Nt+1, len(x)])
+time_array = np.zeros(Nt+1)
+
+######## Initial conditions ############
+w_corrector[0,:] = double_soliton(x, 0)  # Analytic solution at t=0
+w_corrector[1,:] = double_soliton(x, dt)  # Analytic solution at t=dt
+
+istep = 1  # Time start at t=dt since at t=0 we are using the analytic solutions
+time_array[istep] = dt
+
+# Store first two time samples
+if 0 in t_samples:
+    W[0,:] = w_corrector[0,:]
+if 1 in t_samples:
+    W[1,:] = w_corrector[1,:]
+
+########### Function used in the ODE
+def g(vector):
+    return vector + λ * vector**2 + χ**2 * vector**3
+
+# Implementation of the algorithms
+while istep < Nt:
+    istep = istep + 1
+    time_array[istep] = time_array[istep-1] + dt
+
+    # Get corrector values for current timestep
+    Cn = w_corrector[istep-1,:]  # Corrector w_j^(n)
+    Cnn = w_corrector[istep-2,:]  # Corrector w_j^(n-1)
+
+    # Shifted arrays for spatial derivatives
+    Cn_m = np.roll(Cn,1)  # w_(j-1)^(n)
+    Cn_m[0] = δ1
+    Cn_mm = np.roll(Cn,2)
+    Cn_mm[1] = δ1
+    Cn_mm[0] = Cn[0]
+    Cnn_m = np.roll(Cnn,1)  # w_(j-1)^(n-1)
+    Cnn_m[0] = δ1
+    Cnn_mm = np.roll(Cnn,2)
+    Cnn_mm[1] = δ1
+    Cnn_mm[0] = Cnn[0]
+
+    Cn_p = np.roll(Cn,-1)  # w_(j+1)^(n)
+    Cn_p[Nx-1] = δ2
+    Cn_pp = np.roll(Cn,-2)
+    Cn_pp[Nx-2] = δ2
+    Cn_pp[Nx-1] = Cn[Nx-1]
+    Cnn_p = np.roll(Cnn,-1)  # w_(j+1)^(n-1)
+    Cnn_p[Nx-1] = δ2
+    Cnn_pp = np.roll(Cnn,-2)
+    Cnn_pp[Nx-2] = δ2
+    Cnn_pp[Nx-1] = Cnn[Nx-1]
+
+    ######## Implementing the Predictor ###############
+    w_predictor[istep,:] = 2*Cn - Cnn + (c * dt/dx)**2 *(g(Cn_p)-2*g(Cn)+g(Cn_m)) - (c * κ * dt/(dx**2))**2 * (Cn_pp - 4 * Cn_p + 6 * Cn - 4 * Cn_m + Cn_mm)
+
+    Pn = w_predictor[istep,:]  # Predictor w_tilde_j^(n+1)
+    Pn_m = np.roll(Pn,1)  # w_tilde_(j-1)^(n+1)
+    Pn_m[0] = δ1
+    Pn_mm = np.roll(Pn,2)
+    Pn_mm[1] = δ1
+    Pn_mm[0] = Pn[0]
+    Pn_p = np.roll(Pn,-1)  # w_tilde_(j+1)^(n+1)
+    Pn_p[Nx-1] = δ2
+    Pn_pp = np.roll(Pn,-2)
+    Pn_pp[Nx-2] = δ2
+    Pn_pp[Nx-1] = Pn[Nx-1]
+
+    # Implementing the Corrector
+    r = dt/dx
+    p = dt/(dx**2)
+    w_corrector[istep,:] = 2*Cn - Cnn + (c * r)**2 / 12 *(g(Pn_p)-2*g(Pn)+g(Pn_m) + 10 * (g(Cn_p)-2*g(Cn)+g(Cn_m)) + g(Cnn_p)-2*g(Cnn)+g(Cnn_m)) \
+                           - (c * κ * p)**2 / 12 * (Pn_pp - 4 * Pn_p + 6 * Pn - 4 * Pn_m + Pn_mm + 10 * (Cn_pp - 4 * Cn_p + 6 * Cn - 4 * Cn_m + Cn_mm) \
+                                                    + Cnn_pp - 4 * Cnn_p + 6 * Cnn - 4 * Cnn_m + Cnn_mm)
+
+    # Store solution for 3D plot if this is a sampled time step
+    if istep in t_samples:
+        idx = t_samples.index(istep)
+        W[idx,:] = w_corrector[istep,:]
+
+# Create 3D plot with more spacing
+fig = plt.figure(figsize=(12, 10))
+ax = fig.add_subplot(111, projection='3d')
+
+# Plot the 3D surface - with t on x-axis, x on y-axis
+for i in range(num_t_samples):
+    t_val = t_samples[i] * dt
+    ax.plot(np.ones_like(x) * t_val, x, W[i,:], color='black', alpha=0.7, linewidth=0.8)
+
+# Set labels and title with increased padding
+ax.set_xlabel('t', fontsize=18, labelpad=20)
+ax.set_ylabel('x', fontsize=18, labelpad=20)
+ax.set_zlabel('w(x,t)', fontsize=18, labelpad=20)
+ax.set_title('Double-soliton Collision: Numerical solution for Boussinesq Equation', fontsize=16, pad=20)
+
+# Remove grid lines
+ax.grid(False)
+
+# Set view angle
+ax.view_init(elev=30, azim=-45)
+
+# Add parameters as text on the right side of the plot
+params_text = (f"Parameters:\n"
+               f"λ={λ}\nκ={κ}\nχ={χ:.3f}\n\n"
+               f"Soliton 1:\nν1={ν1}\nγ1={γ1:.3f}\n\n"
+               f"Soliton 2:\nν2={ν2}\nγ2={γ2:.3f}")
+
+plt.figtext(0.85, 0.55, params_text, ha='left', fontsize=12, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.5'))
+
+# Adjust limits to focus on the relevant part of the solution
+ax.set_xlim(0, Nt*dt)
+ax.set_ylim(xmin, xmax)
+# Find the maximum value in the solution to set appropriate z-limits
+max_val = np.max(W)
+min_val = np.min(W)
+max_range = max(abs(max_val), abs(min_val))
+ax.set_zlim(-max_range*1.1, max_range*1.1)
+
+# Add a line at t=50s to highlight the collision time
+collision_t = 50
+ax.plot([collision_t, collision_t], [xmin, xmax], [0, 0], 'r--', linewidth=2, alpha=0.8)
+plt.figtext(0.15, 0.85, "Collision at t=50s", ha='left', fontsize=14, color='red')
+
+# Adjust layout and add extra bottom space for labels
+plt.tight_layout()
+plt.subplots_adjust(bottom=0.15)  # Add more space at the bottom
+
+plt.savefig('boussinesq_double_soliton_3d_plot.png', dpi=300, bbox_inches='tight')
+plt.show()
